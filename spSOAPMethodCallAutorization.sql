@@ -24,7 +24,7 @@ CREATE PROCEDURE [dbo].[spSOAPMethodCallAutorization] (
 
 	EXEC @ErrCode = sys.sp_OACreate 'MSXML2.ServerXMLHTTP', @OLEObject OUT
 	IF (@ErrCode = 0) BEGIN
-	  --Базовая аутентификация при указанных @UserName, @Password
+	    --Базовая аутентификация при указанных @UserName, @Password
 		EXEC @ErrCode = sys.sp_OAMethod @OLEObject ,'open',NULL ,'POST' ,@URL ,'false' , @UserName, @Password IF (@ErrCode != 0) BEGIN SET @ErrMethod = 'open'		GOTO Error END
 
 		EXEC @ErrCode = sys.sp_OAMethod @OLEObject ,'setRequestHeader'	,NULL ,'Content-Type'	,'text/xml; charset="utf-8"' IF (@ErrCode != 0) BEGIN SET @ErrMethod = 'setRequestHeader'	GOTO Error END
@@ -44,10 +44,24 @@ CREATE PROCEDURE [dbo].[spSOAPMethodCallAutorization] (
 
 		EXEC @ErrCode = sys.sp_OAGetProperty @OLEObject ,'status' ,@HTTPStatus OUT IF (@ErrCode != 0) BEGIN SET @ErrMethod = 'status'		GOTO Error END
 		IF (@HTTPStatus IN (200,500)) BEGIN
-			DECLARE	@Response TABLE ( Response NVarChar(max) )
+
+		    --получаем результат во временную таблицу
+			DECLARE	@xml TABLE ( Content  NVarChar(max) )
 			--SET TEXTSIZE 2147483647;
-			INSERT	@Response
+			INSERT	@xml
 			EXEC @ErrCode = sys.sp_OAGetProperty @OLEObject ,'responseText' IF (@ErrCode != 0) BEGIN SET @ErrMethod = 'responseText'	GOTO Error END
+
+			--необходимо удалить кодировку 
+			--чтобы избежать ошибки XML parsing: line ..., character ..., unable to switch the encoding
+			declare @Content  NVarChar(max)
+
+			select @Content=Content
+			from @xml
+
+			select @Content=Replace(Replace(@Content,' encoding="utf-8"',''),' encoding=''utf-8''','')
+			select @Content=Replace(Replace(@Content,' encoding="utf-16"',''),' encoding=''utf-16''','')
+
+			declare @Response xml=convert(xml,@Content)
 
 			;WITH XMLNAMESPACES (
 				 'http://www.w3.org/2001/XMLSchema-instance'	AS [xsi]
@@ -55,7 +69,8 @@ CREATE PROCEDURE [dbo].[spSOAPMethodCallAutorization] (
 				,'http://schemas.xmlsoap.org/soap/envelope/'	AS [soap])
 			SELECT	 @Header	= R.X.query('/soap:Envelope/soap:Header/*')
 				,@Result		= R.X.query('/soap:Envelope/soap:Body/*')
-			FROM	@Response CROSS APPLY (SELECT Convert(XML,Replace(Response,' encoding="utf-8"','')) AS X) R
+			from @Response.nodes('/*') as R(X)
+
 			-- Fault
 			;WITH XMLNAMESPACES (
 				 'http://www.w3.org/2001/XMLSchema-instance'	AS [xsi]
